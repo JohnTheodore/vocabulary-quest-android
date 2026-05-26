@@ -1,1 +1,0 @@
-// MOVED TO com.vocabularyquest.app.ExampleInstrumentedTest.kt

@@ -1,11 +1,11 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Base.Theme.VocabularyQuest" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Base.Theme.EvidenceBasedVocabulary" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- Customize your light theme here. -->
         <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash</item>
         <item name="android:windowSplashScreenBackground">#FFFFFF</item>
     </style>
 
-    <style name="Theme.VocabularyQuest" parent="Base.Theme.VocabularyQuest" />
+    <style name="Theme.EvidenceBasedVocabulary" parent="Base.Theme.EvidenceBasedVocabulary" />
 </resources>

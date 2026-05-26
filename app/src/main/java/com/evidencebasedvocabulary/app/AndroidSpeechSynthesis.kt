@@ -1,4 +1,4 @@
-package com.vocabularyquest.app
+package com.evidencebasedvocabulary.app
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
@@ -6,7 +6,7 @@ import android.util.Log
 import android.webkit.JavascriptInterface
 import java.util.Locale
 
-private const val TAG = "VocabQuestApp"
+private const val TAG = "EBVApp"
 
 class AndroidSpeechSynthesis(
     context: Context,

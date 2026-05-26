@@ -1,4 +1,4 @@
-package com.vocabularyquest.app.ui.theme
+package com.evidencebasedvocabulary.app.ui.theme
 
 import android.app.Activity
 import android.os.Build
@@ -24,7 +24,7 @@ private val LightColorScheme = lightColorScheme(
 )
 
 @Composable
-fun VocabQuestTheme(
+fun EvidenceBasedVocabularyTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit

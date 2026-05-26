@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "vocabulary-quest-android"
+rootProject.name = "evidence-based-vocabulary-android"
 include(":app")

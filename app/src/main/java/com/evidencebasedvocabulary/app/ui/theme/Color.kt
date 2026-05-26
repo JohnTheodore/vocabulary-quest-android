@@ -1,4 +1,4 @@
-package com.vocabularyquest.app.ui.theme
+package com.evidencebasedvocabulary.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

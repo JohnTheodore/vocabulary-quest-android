@@ -1,4 +1,4 @@
-package com.vocabularyquest.app
+package com.evidencebasedvocabulary.app
 
 import org.junit.Test
 

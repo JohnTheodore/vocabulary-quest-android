@@ -1,8 +1,8 @@
-# Vocabulary Quest Android Wrapper
+# Evidence Based Vocabulary Android Wrapper
 
 ![Version](https://img.shields.io/badge/version-0.9.5-blue.svg)
 
-A streamlined Android application that provides a native container for the Vocabulary Quest online learning platform.
+A streamlined Android application that provides a native container for the Evidence Based Vocabulary online learning platform.
 
 ## Visual Assets
 
@@ -13,7 +13,7 @@ A streamlined Android application that provides a native container for the Vocab
 
 ## Overview
 
-This project is a WebView-based Android application designed to provide a seamless experience for Vocabulary Quest users on Android devices.
+This project is a WebView-based Android application designed to provide a seamless experience for Evidence Based Vocabulary users on Android devices.
 
 ## Current Version: 0.9.5
 * **Stall fix:** Added FLAG_KEEP_SCREEN_ON and Activity-to-WebView lifecycle forwarding so kiosk sessions don't enter power-save mid-exercise.

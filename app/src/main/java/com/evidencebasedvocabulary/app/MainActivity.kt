@@ -1,4 +1,4 @@
-package com.vocabularyquest.app
+package com.evidencebasedvocabulary.app
 
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -59,10 +59,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.vocabularyquest.app.ui.theme.VocabQuestTheme
+import com.evidencebasedvocabulary.app.ui.theme.EvidenceBasedVocabularyTheme
 import kotlinx.coroutines.delay
 
-private const val TAG = "VocabQuestApp"
+private const val TAG = "EBVApp"
 private const val START_URL = "https://evidencebasedvocabulary.com/"
 
 class MainActivity : ComponentActivity() {
@@ -97,8 +97,8 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            VocabQuestTheme {
-                VocabQuestWebView(START_URL)
+            EvidenceBasedVocabularyTheme {
+                EvidenceBasedVocabularyWebView(START_URL)
             }
         }
     }
@@ -158,7 +158,7 @@ class PersistentInputWebView(context: android.content.Context) : WebView(context
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun VocabQuestWebView(url: String) {
+fun EvidenceBasedVocabularyWebView(url: String) {
     val activity = LocalContext.current as Activity
     val window = activity.window
     var showTtsWarning by remember { mutableStateOf(false) }

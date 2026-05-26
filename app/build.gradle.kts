@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.vocabularyquest.app"
+    namespace = "com.evidencebasedvocabulary.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.vocabularyquest.app"
+        applicationId = "com.evidencebasedvocabulary.app"
         minSdk = 24
         targetSdk = 36
         versionCode = 15
