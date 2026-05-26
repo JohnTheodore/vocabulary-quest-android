@@ -2,14 +2,20 @@ package com.evidencebasedvocabulary.app
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Rect
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -48,10 +54,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -64,6 +70,47 @@ import kotlinx.coroutines.delay
 
 private const val TAG = "EBVApp"
 private const val START_URL = "https://evidencebasedvocabulary.com/"
+private val STOP_MEDIA_SCRIPT = """
+    try {
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+    } catch(e) {}
+    try {
+      document.querySelectorAll('audio,video').forEach(function(el) {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      });
+    } catch(e) {}
+    try {
+      if (window.Howler) {
+        Howler.stop();
+        if (Howler.ctx && Howler.ctx.state !== 'closed') Howler.ctx.close();
+      }
+    } catch(e) {}
+""".trimIndent()
+
+private fun Window.enterImmersiveMode() {
+    WindowCompat.setDecorFitsSystemWindows(this, false)
+    WindowCompat.getInsetsController(this, decorView).apply {
+        hide(WindowInsetsCompat.Type.systemBars())
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+}
+
+private fun View.keepEdgeTouchesInApp() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+
+    fun updateExclusionRects() {
+        if (width > 0 && height > 0) {
+            systemGestureExclusionRects = listOf(Rect(0, 0, width, height))
+        }
+    }
+
+    addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        updateExclusionRects()
+    }
+    post { updateExclusionRects() }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,14 +135,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
-        windowInsetsController.apply {
-            hide(WindowInsetsCompat.Type.navigationBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
-
         enableEdgeToEdge()
+        window.enterImmersiveMode()
         setContent {
             EvidenceBasedVocabularyTheme {
                 EvidenceBasedVocabularyWebView(START_URL)
@@ -106,10 +147,7 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            WindowCompat.getInsetsController(window, window.decorView).apply {
-                hide(WindowInsetsCompat.Type.navigationBars())
-                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
+            window.enterImmersiveMode()
         }
     }
 
@@ -159,12 +197,16 @@ class PersistentInputWebView(context: android.content.Context) : WebView(context
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun EvidenceBasedVocabularyWebView(url: String) {
-    val activity = LocalContext.current as Activity
+    val activity = LocalContext.current as MainActivity
     val window = activity.window
+    val lifecycle = activity.lifecycle
     var showTtsWarning by remember { mutableStateOf(false) }
     
     var customView: View? by remember { mutableStateOf(null) }
     var customViewCallback: WebChromeClient.CustomViewCallback? by remember { mutableStateOf(null) }
+    var webView: WebView? by remember { mutableStateOf(null) }
+    var canGoBack by remember { mutableStateOf(false) }
+    var stoppedForScreenOff by remember { mutableStateOf(false) }
     var filePathCallbackState by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     
     val fileChooserLauncher = rememberLauncherForActivityResult(
@@ -197,6 +239,76 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         } 
     }
 
+    fun stopForScreenOff() {
+        if (stoppedForScreenOff) return
+        stoppedForScreenOff = true
+        Log.d(TAG, "Screen turned off; stopping Evidence Based Vocabulary runtime")
+
+        filePathCallbackState?.onReceiveValue(null)
+        filePathCallbackState = null
+
+        if (customView != null) {
+            webView?.webChromeClient?.onHideCustomView()
+        }
+
+        webView?.let { wv ->
+            runCatching { wv.evaluateJavascript(STOP_MEDIA_SCRIPT, null) }
+            runCatching { wv.stopLoading() }
+            runCatching { wv.loadUrl("about:blank") }
+            runCatching { wv.clearHistory() }
+            runCatching { wv.onPause() }
+            runCatching { wv.pauseTimers() }
+        }
+        speechBridge.cancel()
+        canGoBack = false
+    }
+
+    fun recoverFromScreenOff() {
+        if (!stoppedForScreenOff) return
+        stoppedForScreenOff = false
+        Log.d(TAG, "Screen turned on; reloading Evidence Based Vocabulary runtime")
+
+        window.enterImmersiveMode()
+        val wv = webView
+        if (wv == null) {
+            activity.recreate()
+            return
+        }
+
+        runCatching { wv.resumeTimers() }
+        runCatching { wv.onResume() }
+        runCatching { wv.loadUrl(url) }
+    }
+
+    DisposableEffect(activity, speechBridge, url) {
+        val screenPowerReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> stopForScreenOff()
+                    Intent.ACTION_SCREEN_ON,
+                    Intent.ACTION_USER_PRESENT -> recoverFromScreenOff()
+                }
+            }
+        }
+
+        val screenPowerFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+
+        ContextCompat.registerReceiver(
+            activity,
+            screenPowerReceiver,
+            screenPowerFilter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        onDispose {
+            runCatching { activity.unregisterReceiver(screenPowerReceiver) }
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose { 
             speechBridge.shutdown() 
@@ -209,24 +321,29 @@ fun EvidenceBasedVocabularyWebView(url: String) {
     // this, the WebView's behavior on pause is implementation-defined (some
     // Android versions throttle, some don't), which is how mabel's 17.7s
     // mid-session stall went undetected at the Android layer.
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var webView: WebView? by remember { mutableStateOf(null) }
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
-                    webView?.onPause()
-                    webView?.pauseTimers()
+                    val wv = webView ?: return@LifecycleEventObserver
+                    wv.onPause()
+                    wv.pauseTimers()
                 }
                 Lifecycle.Event.ON_RESUME -> {
-                    webView?.onResume()
-                    webView?.resumeTimers()
+                    if (stoppedForScreenOff) {
+                        recoverFromScreenOff()
+                        return@LifecycleEventObserver
+                    }
+                    val wv = webView ?: return@LifecycleEventObserver
+                    window.enterImmersiveMode()
+                    wv.resumeTimers()
+                    wv.onResume()
                 }
                 else -> {}
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 
     if (showTtsWarning) {
@@ -235,8 +352,6 @@ fun EvidenceBasedVocabularyWebView(url: String) {
             showTtsWarning = false
         }
     }
-
-    var canGoBack by remember { mutableStateOf(false) }
 
     val interactionLockdownScript = """
         (function() {
@@ -345,6 +460,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
+                    keepEdgeTouchesInApp()
                     setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     
                     // Interaction Lockdown: Native Layer
@@ -395,10 +511,8 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                             customViewCallback = callback
                             val decor = window.decorView as ViewGroup
                             decor.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-                            WindowCompat.getInsetsController(window, window.decorView).apply {
-                                hide(WindowInsetsCompat.Type.systemBars())
-                                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                            }
+                            view?.keepEdgeTouchesInApp()
+                            window.enterImmersiveMode()
                         }
 
                         override fun onHideCustomView() {
@@ -408,10 +522,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                             customView = null
                             customViewCallback?.onCustomViewHidden()
                             customViewCallback = null
-                            WindowCompat.getInsetsController(window, window.decorView).apply {
-                                hide(WindowInsetsCompat.Type.navigationBars())
-                                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                            }
+                            window.enterImmersiveMode()
                         }
 
                         override fun onPermissionRequest(request: PermissionRequest?) {
