@@ -63,13 +63,19 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.evidencebasedvocabulary.app.ui.theme.EvidenceBasedVocabularyTheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 private const val TAG = "EBVApp"
 private const val START_URL = "https://evidencebasedvocabulary.com/"
+private const val WEBVIEW_TIMER_PAUSE_GRACE_MS = 5 * 60 * 1000L
+
 private val STOP_MEDIA_SCRIPT = """
     try {
       if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -206,8 +212,53 @@ fun EvidenceBasedVocabularyWebView(url: String) {
     var customViewCallback: WebChromeClient.CustomViewCallback? by remember { mutableStateOf(null) }
     var webView: WebView? by remember { mutableStateOf(null) }
     var canGoBack by remember { mutableStateOf(false) }
-    var stoppedForScreenOff by remember { mutableStateOf(false) }
     var filePathCallbackState by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+
+    // Lifecycle/Timer state
+    var timersPausedByWrapper by remember { mutableStateOf(false) }
+    var pauseTimersJob by remember { mutableStateOf<Job?>(null) }
+
+    fun emitNativeLifecycle(wv: WebView?, type: String, reason: String? = null) {
+        if (wv == null) return
+        val detail = JSONObject().apply {
+            put("type", type)
+            put("reason", reason ?: JSONObject.NULL)
+            put("atMs", System.currentTimeMillis()) // For JS parity
+            put("nativeAtMs", System.currentTimeMillis())
+            put("timersPausedByWrapper", timersPausedByWrapper)
+            put("url", wv.url ?: JSONObject.NULL)
+            put("lifecycleState", lifecycle.currentState.name)
+        }
+        val js = "window.dispatchEvent(new CustomEvent('ebv-native-lifecycle', { detail: $detail }));"
+        wv.post { wv.evaluateJavascript(js, null) }
+    }
+
+    fun scheduleTimerPause(reason: String) {
+        pauseTimersJob?.cancel()
+        emitNativeLifecycle(webView, "pause-timers-scheduled", reason)
+        pauseTimersJob = activity.lifecycleScope.launch {
+            delay(WEBVIEW_TIMER_PAUSE_GRACE_MS)
+            webView?.let { wv ->
+                emitNativeLifecycle(wv, "pause-timers-fired", reason)
+                wv.pauseTimers()
+                timersPausedByWrapper = true
+            }
+        }
+    }
+
+    fun cancelTimerPause(reason: String) {
+        pauseTimersJob?.cancel()
+        pauseTimersJob = null
+        if (timersPausedByWrapper) {
+            webView?.let { wv ->
+                wv.resumeTimers()
+                timersPausedByWrapper = false
+                emitNativeLifecycle(wv, "resume-timers-canceled", reason)
+            }
+        } else {
+            emitNativeLifecycle(webView, "pause-timers-canceled", reason)
+        }
+    }
     
     val fileChooserLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -239,54 +290,42 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         } 
     }
 
-    fun stopForScreenOff() {
-        if (stoppedForScreenOff) return
-        stoppedForScreenOff = true
-        Log.d(TAG, "Screen turned off; stopping Evidence Based Vocabulary runtime")
-
-        filePathCallbackState?.onReceiveValue(null)
-        filePathCallbackState = null
-
-        if (customView != null) {
-            webView?.webChromeClient?.onHideCustomView()
-        }
-
+    fun handleScreenOff() {
+        Log.d(TAG, "Screen turned off; scheduling delayed cleanup")
+        emitNativeLifecycle(webView, "screen-off")
+        
+        // We no longer blank the WebView or stop loading immediately on screen-off.
+        // Instead, we let it run for a grace period.
+        scheduleTimerPause("screen-off")
+        
         webView?.let { wv ->
-            runCatching { wv.evaluateJavascript(STOP_MEDIA_SCRIPT, null) }
-            runCatching { wv.stopLoading() }
-            runCatching { wv.loadUrl("about:blank") }
-            runCatching { wv.clearHistory() }
-            runCatching { wv.onPause() }
-            runCatching { wv.pauseTimers() }
+            // Still pause the WebView rendering/JS execution to be a good citizen,
+            // but keep timers (network/async tasks) running for the grace period.
+            wv.onPause()
+            emitNativeLifecycle(wv, "webview-on-pause", "screen-off")
         }
-        speechBridge.cancel()
-        canGoBack = false
     }
 
-    fun recoverFromScreenOff() {
-        if (!stoppedForScreenOff) return
-        stoppedForScreenOff = false
-        Log.d(TAG, "Screen turned on; reloading Evidence Based Vocabulary runtime")
-
-        window.enterImmersiveMode()
-        val wv = webView
-        if (wv == null) {
-            activity.recreate()
-            return
+    fun handleScreenOn(reason: String) {
+        Log.d(TAG, "Screen active ($reason); resuming")
+        emitNativeLifecycle(webView, reason)
+        
+        cancelTimerPause(reason)
+        
+        webView?.let { wv ->
+            wv.onResume()
+            emitNativeLifecycle(wv, "webview-on-resume", reason)
         }
-
-        runCatching { wv.resumeTimers() }
-        runCatching { wv.onResume() }
-        runCatching { wv.loadUrl(url) }
+        window.enterImmersiveMode()
     }
 
     DisposableEffect(activity, speechBridge, url) {
         val screenPowerReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    Intent.ACTION_SCREEN_OFF -> stopForScreenOff()
-                    Intent.ACTION_SCREEN_ON,
-                    Intent.ACTION_USER_PRESENT -> recoverFromScreenOff()
+                    Intent.ACTION_SCREEN_OFF -> handleScreenOff()
+                    Intent.ACTION_SCREEN_ON -> handleScreenOn("screen-on")
+                    Intent.ACTION_USER_PRESENT -> handleScreenOn("user-present")
                 }
             }
         }
@@ -316,28 +355,34 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         }
     }
 
-    // Forward Activity lifecycle to the WebView so JS timers and the
-    // renderer process suspend/resume in lockstep with the Activity. Without
-    // this, the WebView's behavior on pause is implementation-defined (some
-    // Android versions throttle, some don't), which is how mabel's 17.7s
-    // mid-session stall went undetected at the Android layer.
+    // Forward Activity lifecycle to the WebView.
+    // We now avoid immediate pauseTimers() on ON_PAUSE to prevent severe
+    // JS runtime throttling during transient focus losses.
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
-                    val wv = webView ?: return@LifecycleEventObserver
-                    wv.onPause()
-                    wv.pauseTimers()
+                    emitNativeLifecycle(webView, "activity-on-pause")
+                    webView?.let { wv ->
+                        // onPause() is appropriate for backgrounding, but we avoid
+                        // pauseTimers() here as it's too aggressive.
+                        wv.onPause()
+                        emitNativeLifecycle(wv, "webview-on-pause", "activity-on-pause")
+                    }
                 }
                 Lifecycle.Event.ON_RESUME -> {
-                    if (stoppedForScreenOff) {
-                        recoverFromScreenOff()
-                        return@LifecycleEventObserver
-                    }
-                    val wv = webView ?: return@LifecycleEventObserver
+                    emitNativeLifecycle(webView, "activity-on-resume")
                     window.enterImmersiveMode()
-                    wv.resumeTimers()
-                    wv.onResume()
+                    cancelTimerPause("activity-on-resume")
+                    webView?.let { wv ->
+                        wv.onResume()
+                        emitNativeLifecycle(wv, "webview-on-resume", "activity-on-resume")
+                    }
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    emitNativeLifecycle(webView, "activity-on-stop")
+                    // Start the 5-minute grace period before globally pausing timers.
+                    scheduleTimerPause("activity-on-stop")
                 }
                 else -> {}
             }
