@@ -20,8 +20,10 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
+import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -71,6 +73,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.net.URL
 
 private const val TAG = "EBVApp"
 private const val START_URL = "https://evidencebasedvocabulary.com/"
@@ -200,6 +203,46 @@ class PersistentInputWebView(context: android.content.Context) : WebView(context
     }
 }
 
+/**
+ * JavaScript interface to handle native keyboard requests from the web app.
+ */
+class AndroidKeyboardBridge(
+    private val activity: MainActivity,
+    private val webViewProvider: () -> WebView?
+) {
+    @JavascriptInterface
+    fun showSpellingKeyboard(reason: String?) {
+        val wv = webViewProvider() ?: return
+        
+        // Security check: only allow requests from the trusted host
+        val currentUrl = wv.url ?: return
+        try {
+            val host = URL(currentUrl).host
+            if (host != "evidencebasedvocabulary.com" && !host.endsWith(".evidencebasedvocabulary.com")) {
+                Log.w(TAG, "Keyboard request rejected: unauthorized host $host")
+                return
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Keyboard request rejected: invalid URL", e)
+            return
+        }
+
+        wv.post {
+            if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                Log.d(TAG, "Showing spelling keyboard. Reason: $reason")
+                wv.requestFocus()
+                
+                // Primary method: Use WindowInsetsController
+                WindowCompat.getInsetsController(activity.window, wv).show(WindowInsetsCompat.Type.ime())
+                
+                // Fallback: InputMethodManager
+                val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                imm?.showSoftInput(wv, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun EvidenceBasedVocabularyWebView(url: String) {
@@ -288,6 +331,10 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         AndroidSpeechSynthesis(context = activity) {
             showTtsWarning = true
         } 
+    }
+
+    val keyboardBridge = remember {
+        AndroidKeyboardBridge(activity) { webView }
     }
 
     fun handleScreenOff() {
@@ -496,6 +543,61 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         })();
     """.trimIndent()
 
+    val spellingKeyboardScript = """
+        (function() {
+          if (window.__ebvSpellingKeyboardInstalled) return;
+          window.__ebvSpellingKeyboardInstalled = true;
+
+          const seenInputs = new WeakSet();
+
+          function checkAndShowKeyboard(reason) {
+            const input = document.querySelector('.spell-hidden-input[aria-label="Type spelling"]');
+            if (!input) return;
+
+            // Check if it's already "seen" for this specific element to avoid loops
+            if (seenInputs.has(input)) return;
+
+            // Check visibility and phase
+            const isVisible = input.offsetWidth > 0 || input.offsetHeight > 0;
+            const isCooldown = input.closest('.exercise-phase.exercise-cooldown');
+            
+            if (isVisible && !isCooldown) {
+              seenInputs.add(input);
+              try {
+                input.focus({ preventScroll: true });
+              } catch(e) {
+                input.focus();
+              }
+              if (window.AndroidKeyboard && window.AndroidKeyboard.showSpellingKeyboard) {
+                window.AndroidKeyboard.showSpellingKeyboard(reason);
+              }
+            }
+          }
+
+          const observer = new MutationObserver((mutations) => {
+            checkAndShowKeyboard('mutation');
+          });
+
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class']
+          });
+
+          window.addEventListener('focusin', () => checkAndShowKeyboard('focusin'));
+          window.addEventListener('pageshow', () => checkAndShowKeyboard('pageshow'));
+          window.addEventListener('ebv-native-lifecycle', (e) => {
+            if (e.detail && (e.detail.type === 'activity-on-resume' || e.detail.type === 'webview-on-resume')) {
+              checkAndShowKeyboard('resume');
+            }
+          });
+          
+          // Initial check
+          checkAndShowKeyboard('init');
+        })();
+    """.trimIndent()
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -522,6 +624,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                     }
 
                     addJavascriptInterface(speechBridge, "AndroidSpeech")
+                    addJavascriptInterface(keyboardBridge, "AndroidKeyboard")
 
                     settings.apply {
                         javaScriptEnabled = true
@@ -544,6 +647,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                         WebViewCompat.addDocumentStartJavaScript(this, speechPolyfill, setOf("*"))
                         WebViewCompat.addDocumentStartJavaScript(this, interactionLockdownScript, setOf("*"))
+                        WebViewCompat.addDocumentStartJavaScript(this, spellingKeyboardScript, setOf("*"))
                     }
                     
                     webChromeClient = object : WebChromeClient() {
@@ -611,6 +715,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                             
                             // Lockdown: Force scripts again on finish to be sure
                             view?.evaluateJavascript(interactionLockdownScript, null)
+                            view?.evaluateJavascript(spellingKeyboardScript, null)
                             
                             view?.evaluateJavascript("""
                                 (function() {

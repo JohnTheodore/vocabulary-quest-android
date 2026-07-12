@@ -1,6 +1,6 @@
 # Evidence Based Vocabulary Android Wrapper
 
-![Version](https://img.shields.io/badge/version-0.9.7-blue.svg)
+![Version](https://img.shields.io/badge/version-0.9.8-blue.svg)
 
 A streamlined Android application that provides a native container for the Evidence Based Vocabulary online learning platform.
 
@@ -15,7 +15,8 @@ A streamlined Android application that provides a native container for the Evide
 
 This project is a WebView-based Android application designed to provide a seamless experience for Evidence Based Vocabulary users on Android devices.
 
-## Current Version: 0.9.7
+## Current Version: 0.9.8
+* **Keyboard fix:** Implemented a native keyboard bridge and MutationObserver script to automatically open the soft keyboard for spelling cards.
 * **Stall fix:** Added FLAG_KEEP_SCREEN_ON and Activity-to-WebView lifecycle forwarding so kiosk sessions don't enter power-save mid-exercise.
 * Interaction lockdown: Disabled pinch-zoom, long-press selection, and context menus.
 * Updated main URL to `evidencebasedvocabulary.com`.
@@ -26,6 +27,7 @@ This project is a WebView-based Android application designed to provide a seamle
 
 ## Key Features
 
+*   **Native Keyboard Bridge:** Automatically triggers the Android soft keyboard when spelling inputs appear, improving the "no-tap" experience for students.
 *   **Native Speech Synthesis Bridge:** Implements a custom `AndroidSpeechSynthesis` bridge that polyfills the web `speechSynthesis` API using native Android TTS, ensuring that lesson narrations work reliably.
 *   **Audio Context Management:** Includes specialized logic to handle and resume `Howler.js` and Web Audio contexts, bypassing standard browser restrictions on autoplay audio.
 *   **Immersive Learning:** Interaction lockdowns prevent accidental zooming or text selection during gameplay.

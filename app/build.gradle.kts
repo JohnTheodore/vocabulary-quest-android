@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.evidencebasedvocabulary.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.evidencebasedvocabulary.app"
         minSdk = 24
-        targetSdk = 36
-        versionCode = 17
-        versionName = "0.9.7"
+        targetSdk = 37
+        versionCode = 18
+        versionName = "0.9.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
