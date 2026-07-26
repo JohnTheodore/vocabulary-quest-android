@@ -1,6 +1,6 @@
 # Evidence Based Vocabulary Android Wrapper
 
-![Version](https://img.shields.io/badge/version-0.9.8-blue.svg)
+![Version](https://img.shields.io/badge/version-0.9.9-blue.svg)
 
 A streamlined Android application that provides a native container for the Evidence Based Vocabulary online learning platform.
 
@@ -15,43 +15,29 @@ A streamlined Android application that provides a native container for the Evide
 
 This project is a WebView-based Android application designed to provide a seamless experience for Evidence Based Vocabulary users on Android devices.
 
-## Current Version: 0.9.8
-* **Keyboard fix:** Implemented a native keyboard bridge and MutationObserver script to automatically open the soft keyboard for spelling cards.
-* **Stall fix:** Added FLAG_KEEP_SCREEN_ON and Activity-to-WebView lifecycle forwarding so kiosk sessions don't enter power-save mid-exercise.
-* Interaction lockdown: Disabled pinch-zoom, long-press selection, and context menus.
-* Updated main URL to `evidencebasedvocabulary.com`.
-* Native Speech Synthesis bridge implementation.
-* Custom adaptive launcher icon and splash screen.
-* Full-screen (Edge-to-Edge) implementation.
-* Configuration change fixes for external keyboards.
+## Recent Stability Improvements (v0.9.9)
+*   **Automatic Renderer Recovery:** Implemented `WebViewRenderProcessClient` to detect and automatically recover from hung renderers (UI freezes).
+*   **Renderer Crash Resilience:** Centralized lifecycle management ensures that renderer crashes or system kills are handled gracefully without requiring an app restart.
+*   **Safe Lifecycle Handling:** Replaced destructive screen-off behavior with proper pause/resume logic. JavaScript timers are paused and media is suspended without blanking the page.
+*   **TTS Generation Safety:** Added generation-based tracking for Text-to-Speech callbacks to prevent stale utterances from targeting detached WebView instances.
+*   **Popup Management:** Every popup WebView now correctly handles renderer loss, preventing application-wide crashes.
+*   **Diagnostics:** Improved logging for WebView provider versions and recovery incidents.
 
 ## Key Features
-
-*   **Native Keyboard Bridge:** Automatically triggers the Android soft keyboard when spelling inputs appear, improving the "no-tap" experience for students.
-*   **Native Speech Synthesis Bridge:** Implements a custom `AndroidSpeechSynthesis` bridge that polyfills the web `speechSynthesis` API using native Android TTS, ensuring that lesson narrations work reliably.
-*   **Audio Context Management:** Includes specialized logic to handle and resume `Howler.js` and Web Audio contexts, bypassing standard browser restrictions on autoplay audio.
-*   **Immersive Learning:** Interaction lockdowns prevent accidental zooming or text selection during gameplay.
-*   **Modern Android UI:** Built with **Jetpack Compose** and **Material 3**, featuring full **Edge-to-Edge** support for an immersive learning environment.
-*   **Performance Optimized:** Utilizes software rendering for the WebView to ensure consistent input focus and backspace behavior.
-
-## Project Structure
-
-*   `MainActivity.kt`: The main entry point using Compose to host the `WebView`.
-*   `AndroidSpeechSynthesis.kt`: Native implementation of the Text-to-Speech bridge.
-*   `res/`: Optimized resources including an adaptive launcher icon specifically tuned for the Pixel Tablet experience.
+*   **Native Keyboard Bridge:** Automatically triggers the Android soft keyboard when spelling inputs appear.
+*   **Native Speech Synthesis Bridge:** Implements a custom `AndroidSpeechSynthesis` bridge using native Android TTS.
+*   **Immersive Learning:** Interaction lockdowns prevent accidental zooming or text selection.
+*   **Modern Android UI:** Built with **Jetpack Compose** and **Material 3**.
 
 ## Build Requirements
-
 *   Android Studio Ladybug or newer.
 *   Android SDK 34+.
 *   Gradle 8.0+.
 
 ## How to Build
-
 1. Clone the repository.
 2. Open the project in Android Studio.
-3. Run the `:app:assembleDebug` task or click the **Run** button in Android Studio.
+3. Run the `:app:assembleDebug` task.
 
 ## License
-
 MIT License
