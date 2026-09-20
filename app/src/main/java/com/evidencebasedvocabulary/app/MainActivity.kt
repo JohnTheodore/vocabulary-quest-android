@@ -66,6 +66,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.evidencebasedvocabulary.app.ui.theme.EvidenceBasedVocabularyTheme
@@ -78,6 +80,8 @@ import java.net.URL
 private const val TAG = "EBVApp"
 private const val START_URL = "https://evidencebasedvocabulary.com/"
 private const val WEBVIEW_TIMER_PAUSE_GRACE_MS = 5 * 60 * 1000L
+private const val SCREEN_POLICY_BRIDGE = "AndroidScreenPolicy"
+private val TRUSTED_WEB_ORIGINS = setOf("https://evidencebasedvocabulary.com")
 
 private val STOP_MEDIA_SCRIPT = """
     try {
@@ -124,14 +128,6 @@ private fun View.keepEdgeTouchesInApp() {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Keep the screen on while this Activity is foregrounded. Kiosk
-        // learning sessions where the kid pauses for >screen-timeout would
-        // otherwise auto-lock, paint the WebView's network stack into a
-        // power-save state, and freeze mid-session — observed as
-        // exercise-transition-stalled in Sentry for student_mabel on
-        // 2026-05-14 and 2026-05-17.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Ensure volume is up for media playback
         (getSystemService(AUDIO_SERVICE) as? AudioManager)?.let { audioManager ->
@@ -397,6 +393,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
 
     DisposableEffect(Unit) {
         onDispose { 
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             speechBridge.shutdown() 
             CookieManager.getInstance().flush()
         }
@@ -598,6 +595,67 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         })();
     """.trimIndent()
 
+    val screenPolicyScript = """
+        (function() {
+          if (window.__ebvScreenPolicyInstalled) return;
+          window.__ebvScreenPolicyInstalled = true;
+
+          let lastState = null;
+          let explicitStateReceived = false;
+
+          function postState(active, source) {
+            active = Boolean(active);
+            if (active === lastState) return;
+            lastState = active;
+            if (window.$SCREEN_POLICY_BRIDGE && window.$SCREEN_POLICY_BRIDGE.postMessage) {
+              window.$SCREEN_POLICY_BRIDGE.postMessage(JSON.stringify({
+                type: 'lesson-state',
+                active: active,
+                source: source
+              }));
+            }
+          }
+
+          // Preferred contract for the web app: dispatch this event whenever
+          // lesson state changes. detail may be a boolean or { active: boolean }.
+          window.addEventListener('ebv-lesson-state', function(event) {
+            const detail = event.detail;
+            const active = typeof detail === 'boolean' ? detail : detail && detail.active;
+            if (typeof active !== 'boolean') return;
+            explicitStateReceived = true;
+            postState(active, 'web-event');
+          });
+
+          // Compatibility path for the current lesson UI. The app marks all
+          // student lesson routes as game-active and mounts lp-done when the
+          // lesson has ended. Once the explicit contract is used, it remains
+          // authoritative.
+          function syncFromDom() {
+            if (explicitStateReceived) return;
+            const lessonRoute = document.querySelector('.app.game-active');
+            const lessonDone = document.querySelector('.lp-done');
+            postState(Boolean(lessonRoute && !lessonDone), 'lesson-dom');
+          }
+
+          function installObserver() {
+            if (!document.body) return;
+            syncFromDom();
+            new MutationObserver(syncFromDom).observe(document.body, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ['class', 'hidden', 'style']
+            });
+          }
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', installObserver, { once: true });
+          } else {
+            installObserver();
+          }
+        })();
+    """.trimIndent()
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -626,6 +684,42 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                     addJavascriptInterface(speechBridge, "AndroidSpeech")
                     addJavascriptInterface(keyboardBridge, "AndroidKeyboard")
 
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                        WebViewCompat.addWebMessageListener(
+                            this,
+                            SCREEN_POLICY_BRIDGE,
+                            TRUSTED_WEB_ORIGINS,
+                            object : WebViewCompat.WebMessageListener {
+                                override fun onPostMessage(
+                                    view: WebView,
+                                    message: WebMessageCompat,
+                                    sourceOrigin: Uri,
+                                    isMainFrame: Boolean,
+                                    replyProxy: JavaScriptReplyProxy
+                                ) {
+                                    if (!isMainFrame || sourceOrigin.host != "evidencebasedvocabulary.com") return
+
+                                    val messageData = message.data ?: return
+                                    val payload = runCatching { JSONObject(messageData) }.getOrNull()
+                                    if (payload?.optString("type") != "lesson-state" || !payload.has("active")) return
+
+                                    val lessonActive = payload.optBoolean("active")
+                                    if (lessonActive) {
+                                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                    } else {
+                                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                    }
+                                    Log.d(
+                                        TAG,
+                                        "Screen awake=$lessonActive (${payload.optString("source", "unknown")})"
+                                    )
+                                }
+                            }
+                        )
+                    } else {
+                        Log.w(TAG, "WebView does not support the lesson screen-policy bridge")
+                    }
+
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
@@ -648,6 +742,7 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                         WebViewCompat.addDocumentStartJavaScript(this, speechPolyfill, setOf("*"))
                         WebViewCompat.addDocumentStartJavaScript(this, interactionLockdownScript, setOf("*"))
                         WebViewCompat.addDocumentStartJavaScript(this, spellingKeyboardScript, setOf("*"))
+                        WebViewCompat.addDocumentStartJavaScript(this, screenPolicyScript, TRUSTED_WEB_ORIGINS)
                     }
                     
                     webChromeClient = object : WebChromeClient() {
@@ -707,9 +802,23 @@ fun EvidenceBasedVocabularyWebView(url: String) {
                     }
                     
                     webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+
                         override fun onPageFinished(view: WebView?, url: String?) {
                             canGoBack = view?.canGoBack() ?: false
                             CookieManager.getInstance().flush()
+
+                            // Older WebViews may lack document-start script support.
+                            // Install the screen policy after load on the trusted host
+                            // so those devices still receive the same behavior.
+                            val isTrustedPage = runCatching {
+                                URL(url).host == "evidencebasedvocabulary.com"
+                            }.getOrDefault(false)
+                            if (isTrustedPage) {
+                                view?.evaluateJavascript(screenPolicyScript, null)
+                            }
                             
                             view?.requestFocus()
                             

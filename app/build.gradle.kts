@@ -11,8 +11,8 @@ android {
         applicationId = "com.evidencebasedvocabulary.app"
         minSdk = 24
         targetSdk = 37
-        versionCode = 18
-        versionName = "0.9.8"
+        versionCode = 19
+        versionName = "0.9.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
