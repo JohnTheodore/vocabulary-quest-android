@@ -63,6 +63,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
@@ -207,35 +208,58 @@ class AndroidKeyboardBridge(
     private val webViewProvider: () -> WebView?
 ) {
     @JavascriptInterface
-    fun showSpellingKeyboard(reason: String?) {
+    fun showSpellingKeyboard(requestId: String?) {
         val wv = webViewProvider() ?: return
-        
-        // Security check: only allow requests from the trusted host
-        val currentUrl = wv.url ?: return
-        try {
-            val host = URL(currentUrl).host
-            if (host != "evidencebasedvocabulary.com" && !host.endsWith(".evidencebasedvocabulary.com")) {
-                Log.w(TAG, "Keyboard request rejected: unauthorized host $host")
-                return
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Keyboard request rejected: invalid URL", e)
-            return
-        }
 
         wv.post {
-            if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                Log.d(TAG, "Showing spelling keyboard. Reason: $reason")
-                wv.requestFocus()
-                
-                // Primary method: Use WindowInsetsController
-                WindowCompat.getInsetsController(activity.window, wv).show(WindowInsetsCompat.Type.ime())
-                
-                // Fallback: InputMethodManager
-                val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                imm?.showSoftInput(wv, InputMethodManager.SHOW_IMPLICIT)
+            // JavascriptInterface methods run on a bridge thread; WebView state
+            // and all IME operations belong on the WebView's UI thread.
+            val trustedHost = runCatching {
+                URL(wv.url ?: "").host.let { host ->
+                    host == "evidencebasedvocabulary.com" || host.endsWith(".evidencebasedvocabulary.com")
+                }
+            }.getOrDefault(false)
+            if (!trustedHost) {
+                Log.w(TAG, "Keyboard request rejected: untrusted page")
+                reportKeyboardResult(wv, requestId, "rejected")
+                return@post
             }
+            // The JS caller waits for this result. A request received during pause must
+            // remain eligible when the same card is active again on resume.
+            if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || !wv.hasWindowFocus()) {
+                reportKeyboardResult(wv, requestId, "deferred")
+                return@post
+            }
+            if (ViewCompat.getRootWindowInsets(wv)?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
+                reportKeyboardResult(wv, requestId, "shown")
+                return@post
+            }
+            Log.d(TAG, "Requesting spelling keyboard. Id: $requestId")
+            wv.requestFocus()
+            WindowCompat.getInsetsController(activity.window, wv).show(WindowInsetsCompat.Type.ime())
+            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(wv, InputMethodManager.SHOW_IMPLICIT)
+            // showSoftInput only acknowledges a request. Observe visibility before
+            // treating the card as handled; a hardware keyboard needs no soft IME.
+            wv.postDelayed({
+                if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    reportKeyboardResult(wv, requestId, "deferred")
+                    return@postDelayed
+                }
+                val hardwareKeyboard = activity.resources.configuration.run {
+                    keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS &&
+                        hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                }
+                val shown = ViewCompat.getRootWindowInsets(wv)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                reportKeyboardResult(wv, requestId, if (shown || hardwareKeyboard) "shown" else "not-shown")
+            }, 350)
         }
+    }
+
+    private fun reportKeyboardResult(wv: WebView, requestId: String?, result: String) {
+        Log.d(TAG, "Spelling keyboard request $requestId: $result")
+        val id = JSONObject.quote(requestId ?: "")
+        wv.evaluateJavascript("window.__ebvSpellingKeyboardResult && window.__ebvSpellingKeyboardResult($id, '$result')", null)
     }
 }
 
@@ -540,60 +564,9 @@ fun EvidenceBasedVocabularyWebView(url: String) {
         })();
     """.trimIndent()
 
-    val spellingKeyboardScript = """
-        (function() {
-          if (window.__ebvSpellingKeyboardInstalled) return;
-          window.__ebvSpellingKeyboardInstalled = true;
-
-          const seenInputs = new WeakSet();
-
-          function checkAndShowKeyboard(reason) {
-            const input = document.querySelector('.spell-hidden-input[aria-label="Type spelling"]');
-            if (!input) return;
-
-            // Check if it's already "seen" for this specific element to avoid loops
-            if (seenInputs.has(input)) return;
-
-            // Check visibility and phase
-            const isVisible = input.offsetWidth > 0 || input.offsetHeight > 0;
-            const isCooldown = input.closest('.exercise-phase.exercise-cooldown');
-            
-            if (isVisible && !isCooldown) {
-              seenInputs.add(input);
-              try {
-                input.focus({ preventScroll: true });
-              } catch(e) {
-                input.focus();
-              }
-              if (window.AndroidKeyboard && window.AndroidKeyboard.showSpellingKeyboard) {
-                window.AndroidKeyboard.showSpellingKeyboard(reason);
-              }
-            }
-          }
-
-          const observer = new MutationObserver((mutations) => {
-            checkAndShowKeyboard('mutation');
-          });
-
-          observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class']
-          });
-
-          window.addEventListener('focusin', () => checkAndShowKeyboard('focusin'));
-          window.addEventListener('pageshow', () => checkAndShowKeyboard('pageshow'));
-          window.addEventListener('ebv-native-lifecycle', (e) => {
-            if (e.detail && (e.detail.type === 'activity-on-resume' || e.detail.type === 'webview-on-resume')) {
-              checkAndShowKeyboard('resume');
-            }
-          });
-          
-          // Initial check
-          checkAndShowKeyboard('init');
-        })();
-    """.trimIndent()
+    val spellingKeyboardScript = remember(activity) {
+        activity.assets.open("spelling-keyboard.js").bufferedReader().use { it.readText() }
+    }
 
     val screenPolicyScript = """
         (function() {
