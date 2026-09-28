@@ -54,6 +54,15 @@ This project is a WebView-based Android application designed to provide a seamle
 2. Open the project in Android Studio.
 3. Run the `:app:assembleDebug` task or click the **Run** button in Android Studio.
 
+## GitHub APK signing
+
+GitHub release APKs use the debug build and the key stored locally in
+`.local-signing/debug.keystore`. Gradle reads its credentials from the
+gitignored `.local-signing/debug.properties`. Keep both files together when
+moving the release build to another machine. Before uploading a future APK,
+compare its signer certificate with the previous GitHub release; a different
+certificate prevents an in-place Android update.
+
 ## License
 
 MIT License

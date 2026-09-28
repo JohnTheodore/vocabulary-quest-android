@@ -1,6 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val localSigningPropertiesFile = rootProject.file(".local-signing/debug.properties")
+val localSigningProperties = Properties().apply {
+    if (localSigningPropertiesFile.isFile) {
+        localSigningPropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -18,6 +27,18 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            // Use the same locally retained certificate for future GitHub APKs.
+            // Fresh clones without these gitignored files keep normal Android debug signing.
+            if (localSigningPropertiesFile.isFile) {
+                signingConfig = signingConfigs.getByName("debug").apply {
+                    storeFile = rootProject.file(".local-signing/debug.keystore")
+                    storePassword = localSigningProperties.getProperty("storePassword")
+                    keyAlias = localSigningProperties.getProperty("keyAlias")
+                    keyPassword = localSigningProperties.getProperty("keyPassword")
+                }
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
